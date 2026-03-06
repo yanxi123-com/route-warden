@@ -1,0 +1,69 @@
+controller:
+  base_url: "http://127.0.0.1:9090"
+  secret: ""
+
+interval_sec: 180
+cooldown_sec: 600
+min_wins: 3
+min_improvement: 0.15
+
+groups:
+  GOOGLE_GROUP:
+    strategy_group: "GOOGLE"
+  BINANCE_GROUP:
+    strategy_group: "BINANCE"
+  OPENAI_GROUP:
+    strategy_group: "OPENAI"
+  GITHUB_GROUP:
+    strategy_group: "GITHUB"
+  GLOBAL_BEST:
+    strategy_group: "GLOBAL"
+
+targets:
+  GOOGLE_GROUP:
+    - name: "google"
+      url: "https://www.google.com/generate_204"
+      success_status: [204]
+  BINANCE_GROUP:
+    - name: "binance"
+      url: "https://api.binance.com/api/v3/time"
+      success_status: [200, 403]
+  OPENAI_GROUP:
+    - name: "chatgpt"
+      url: "https://chatgpt.com/favicon.ico"
+      success_status: [200, 301, 302]
+    - name: "openai"
+      url: "https://api.openai.com/v1/models"
+      success_status: [200, 401, 403]
+  GITHUB_GROUP:
+    - name: "github"
+      url: "https://github.com"
+      success_status: [200, 301, 302]
+    - name: "github-api"
+      url: "https://api.github.com"
+      success_status: [200]
+  GLOBAL_BEST:
+    - name: "google"
+      url: "https://www.google.com/generate_204"
+      success_status: [204]
+    - name: "binance"
+      url: "https://api.binance.com/api/v3/time"
+      success_status: [200, 403]
+
+scoring:
+  availability_weight: 0.7
+  p50_weight: 0.15
+  p95_weight: 0.1
+  jitter_weight: 0.05
+
+routing:
+  domain_to_group:
+    "google.com": "GOOGLE_GROUP"
+    "api.binance.com": "BINANCE_GROUP"
+    "chatgpt.com": "OPENAI_GROUP"
+    "api.openai.com": "OPENAI_GROUP"
+    "github.com": "GITHUB_GROUP"
+    "api.github.com": "GITHUB_GROUP"
+
+logging:
+  level: "info"
