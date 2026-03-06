@@ -1,0 +1,2 @@
+ALTER TABLE switch_events
+ADD COLUMN score_gap REAL NOT NULL DEFAULT 0;

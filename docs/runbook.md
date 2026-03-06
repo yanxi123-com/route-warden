@@ -9,19 +9,19 @@ cargo build --release
 产物：`target/release/route-warden`
 默认配置路径：`~/.route-warden/config.yaml`（可通过 `--config` 覆盖）。
 
-## 2. 同步 Clash Verge 的 RW 组模板
+## 2. 同步 Clash Verge 的 RW 组与路由规则模板
 
-先把 `RW_*` 组写入 `Profile Enhancement -> Groups`（避免手工维护）。
+同步 `Profile Enhancement -> Groups` 与 `Profile Enhancement -> Rules`（避免手工维护）。
 
 ```bash
 # 只看将改哪些文件（默认当前 profile）
-./target/release/route-warden sync-rw-groups --dry-run
+./target/release/route-warden sync-rw-profile --dry-run
 
 # 写入当前 profile
-./target/release/route-warden sync-rw-groups
+./target/release/route-warden sync-rw-profile
 
-# 写入所有远程订阅绑定的 groups 文件
-./target/release/route-warden sync-rw-groups --all
+# 写入所有远程订阅绑定的 enhancement 文件
+./target/release/route-warden sync-rw-profile --all
 ```
 
 默认 Clash Verge 目录：`~/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev`  
@@ -34,6 +34,8 @@ cargo build --release
 ```bash
 ./target/release/route-warden --once --dry-run
 ```
+
+建议设置 `RUST_LOG=info`，可看到每轮切换决策与每分钟状态报告日志。
 
 `examples/config.example.yaml` 关键项：
 - `controller.base_url`：Clash controller 地址（支持 `unix:///tmp/verge/verge-mihomo.sock`）
@@ -81,8 +83,8 @@ log show --last 10m --predicate 'process == "route-warden"'
 - 提高 `min_wins` 与 `cooldown_sec`。
 - 提高 `min_improvement` 阈值，降低抖动切换。
 
-### 5.4 sync-rw-groups 执行后看不到 RW 组
-- 确认命令输出的目标文件是当前 profile 绑定的 groups 文件。
+### 5.4 sync-rw-profile 执行后看不到 RW 组或规则
+- 确认命令输出的目标文件是当前 profile 绑定的 groups/rules 文件。
 - 在 Clash Verge 执行一次 profile 重载或重启内核。
 - 使用 controller 检查：
 

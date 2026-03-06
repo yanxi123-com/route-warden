@@ -1,10 +1,12 @@
 mod http_probe;
 
+use std::error::Error;
+use std::io::ErrorKind;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 pub use http_probe::probe_url;
-use reqwest::Client;
+use reqwest::{Client, Method};
 
 #[derive(Debug, Clone)]
 pub struct ProbeResult {
@@ -34,11 +36,14 @@ pub fn classify(target: &str, status_code: u16) -> Classification {
 pub async fn probe_target(
     client: &Client,
     target: &str,
+    method: &str,
     url: &str,
     timeout: Duration,
 ) -> Result<ProbeResult> {
+    let method = Method::from_bytes(method.as_bytes())
+        .with_context(|| format!("invalid HTTP method: {method}"))?;
     let start = Instant::now();
-    let response = client.get(url).timeout(timeout).send().await;
+    let response = client.request(method, url).timeout(timeout).send().await;
     let elapsed = start.elapsed();
 
     let result = match response {
@@ -71,14 +76,108 @@ pub async fn probe_target(
 }
 
 fn classify_transport_error(err: &reqwest::Error) -> String {
-    if err.is_timeout() {
+    let io_kind = find_io_error_kind(err);
+    let message = collect_error_messages(err);
+    classify_transport_error_parts(err.is_timeout(), &message, io_kind)
+}
+
+fn classify_transport_error_parts(
+    is_timeout: bool,
+    message: &str,
+    io_kind: Option<ErrorKind>,
+) -> String {
+    if is_timeout {
         return "timeout".to_string();
     }
-    if err.is_connect() {
-        return "connect_error".to_string();
+
+    let lower = message.to_ascii_lowercase();
+    if matches!(io_kind, Some(ErrorKind::ConnectionReset))
+        || lower.contains("connection reset")
+        || lower.contains("tcp reset")
+    {
+        return "tcp_reset".to_string();
     }
-    if err.is_request() {
-        return "request_error".to_string();
+
+    if lower.contains("tls")
+        || lower.contains("ssl")
+        || lower.contains("certificate")
+        || lower.contains("handshake")
+        || lower.contains("x509")
+    {
+        return "tls_fail".to_string();
     }
+
     "transport_error".to_string()
+}
+
+fn find_io_error_kind(err: &reqwest::Error) -> Option<ErrorKind> {
+    let mut source = err.source();
+    while let Some(item) = source {
+        if let Some(io_err) = item.downcast_ref::<std::io::Error>() {
+            return Some(io_err.kind());
+        }
+        source = item.source();
+    }
+    None
+}
+
+fn collect_error_messages(err: &reqwest::Error) -> String {
+    let mut text = err.to_string();
+    let mut source = err.source();
+    while let Some(item) = source {
+        text.push(' ');
+        text.push_str(&item.to_string());
+        source = item.source();
+    }
+    text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify_transport_error_parts;
+    use std::io::ErrorKind;
+
+    #[test]
+    fn classify_timeout_first() {
+        assert_eq!(
+            classify_transport_error_parts(true, "tls handshake timeout", None),
+            "timeout"
+        );
+    }
+
+    #[test]
+    fn classify_tcp_reset_by_io_kind_or_message() {
+        assert_eq!(
+            classify_transport_error_parts(
+                false,
+                "network error",
+                Some(ErrorKind::ConnectionReset)
+            ),
+            "tcp_reset"
+        );
+        assert_eq!(
+            classify_transport_error_parts(false, "connection reset by peer", None),
+            "tcp_reset"
+        );
+    }
+
+    #[test]
+    fn classify_tls_failure_by_message() {
+        assert_eq!(
+            classify_transport_error_parts(false, "tls handshake eof", None),
+            "tls_fail"
+        );
+        assert_eq!(
+            classify_transport_error_parts(false, "invalid certificate chain", None),
+            "tls_fail"
+        );
+    }
+
+    #[test]
+    fn classify_other_transport_failure() {
+        assert_eq!(
+            classify_transport_error_parts(false, "dns lookup failed", None),
+            "transport_error"
+        );
+    }
 }

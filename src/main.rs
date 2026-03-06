@@ -4,13 +4,24 @@ async fn main() {
 
     if let Some(command) = cli.command.clone() {
         match command {
-            route_warden::cli::Command::SyncRwGroups(args) => {
+            route_warden::cli::Command::SyncRwProfile(args) => {
                 let verge_dir = args.verge_dir.unwrap_or_else(default_clash_verge_dir);
-                match route_warden::clash_verge::sync_rw_groups(&verge_dir, args.all, args.dry_run)
-                {
+                let config = match route_warden::config::load_from_path(&cli.config) {
+                    Ok(v) => v,
+                    Err(err) => {
+                        eprintln!("load config failed: {err:#}");
+                        std::process::exit(1);
+                    }
+                };
+                match route_warden::clash_verge::sync_rw_profile(
+                    &verge_dir,
+                    &config,
+                    args.all,
+                    args.dry_run,
+                ) {
                     Ok(files) => {
                         println!(
-                            "sync-rw-groups done (dry_run={}, files={})",
+                            "sync-rw-profile done (dry_run={}, files={})",
                             args.dry_run,
                             files.len()
                         );
@@ -19,7 +30,7 @@ async fn main() {
                         }
                     }
                     Err(err) => {
-                        eprintln!("sync-rw-groups failed: {err:#}");
+                        eprintln!("sync-rw-profile failed: {err:#}");
                         std::process::exit(1);
                     }
                 }

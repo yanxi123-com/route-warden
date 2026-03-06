@@ -17,6 +17,7 @@ pub struct SwitchEventRecord {
     pub group_name: String,
     pub from_node: String,
     pub to_node: String,
+    pub score_gap: f64,
     pub reason: String,
     pub created_at: i64,
 }
@@ -40,6 +41,17 @@ pub struct ProbeRecord {
     pub is_success: bool,
     pub failure_kind: Option<String>,
     pub created_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeSummaryRecord {
+    pub group_name: String,
+    pub node_name: String,
+    pub total: i64,
+    pub success: i64,
+    pub success_rate: f64,
+    pub avg_latency_ms: f64,
+    pub last_probe_at: i64,
 }
 
 pub struct SqliteStore {
@@ -110,18 +122,46 @@ impl SqliteStore {
     pub fn save_switch_event(&self, event: &SwitchEventRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO switch_events (group_name, from_node, to_node, reason, created_at)
-            VALUES (?1, ?2, ?3, ?4, ?5)
+            INSERT INTO switch_events (group_name, from_node, to_node, score_gap, reason, created_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
             "#,
             params![
                 event.group_name,
                 event.from_node,
                 event.to_node,
+                event.score_gap,
                 event.reason,
                 event.created_at,
             ],
         )?;
         Ok(())
+    }
+
+    pub fn list_switch_events(&self) -> Result<Vec<SwitchEventRecord>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT group_name, from_node, to_node, score_gap, reason, created_at
+            FROM switch_events
+            ORDER BY id ASC
+            "#,
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok(SwitchEventRecord {
+                group_name: row.get(0)?,
+                from_node: row.get(1)?,
+                to_node: row.get(2)?,
+                score_gap: row.get(3)?,
+                reason: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })?;
+
+        let mut out = Vec::new();
+        for item in rows {
+            out.push(item?);
+        }
+        Ok(out)
     }
 
     pub fn start_round(&self, started_at: i64) -> Result<i64> {
@@ -221,10 +261,67 @@ impl SqliteStore {
         Ok(out)
     }
 
+    pub fn summarize_probes_since(&self, since_ts: i64) -> Result<Vec<ProbeSummaryRecord>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT
+              group_name,
+              node_name,
+              COUNT(*) AS total,
+              SUM(CASE WHEN is_success = 1 THEN 1 ELSE 0 END) AS success,
+              AVG(CASE WHEN is_success = 1 THEN latency_ms END) AS avg_latency_ms,
+              MAX(created_at) AS last_probe_at
+            FROM probes
+            WHERE created_at >= ?1
+            GROUP BY group_name, node_name
+            ORDER BY group_name ASC, success DESC, total DESC
+            "#,
+        )?;
+
+        let rows = stmt.query_map(params![since_ts], |row| {
+            let total: i64 = row.get(2)?;
+            let success: i64 = row.get(3)?;
+            let rate = if total <= 0 {
+                0.0
+            } else {
+                success as f64 / total as f64
+            };
+            Ok(ProbeSummaryRecord {
+                group_name: row.get(0)?,
+                node_name: row.get(1)?,
+                total,
+                success,
+                success_rate: rate,
+                avg_latency_ms: row.get::<_, Option<f64>>(4)?.unwrap_or(0.0),
+                last_probe_at: row.get(5)?,
+            })
+        })?;
+
+        let mut out = Vec::new();
+        for item in rows {
+            out.push(item?);
+        }
+        Ok(out)
+    }
+
     fn init_schema(&self) -> Result<()> {
         self.conn
             .execute_batch(include_str!("../../migrations/0001_init.sql"))
             .context("初始化 SQLite schema 失败")?;
+        match self.conn.execute_batch(include_str!(
+            "../../migrations/0002_switch_events_score_gap.sql"
+        )) {
+            Ok(_) => {}
+            Err(err) if is_duplicate_column_error(&err) => {}
+            Err(err) => return Err(err).context("执行 SQLite 迁移 0002 失败"),
+        }
         Ok(())
     }
+}
+
+fn is_duplicate_column_error(err: &rusqlite::Error) -> bool {
+    let rusqlite::Error::SqliteFailure(_, Some(msg)) = err else {
+        return false;
+    };
+    msg.contains("duplicate column name")
 }

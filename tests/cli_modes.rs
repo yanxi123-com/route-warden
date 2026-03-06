@@ -18,10 +18,10 @@ fn parse_dry_run_and_once_flags() {
 }
 
 #[test]
-fn parse_sync_rw_groups_subcommand() {
+fn parse_sync_rw_profile_subcommand() {
     let cli = route_warden::cli::parse_from([
         "route-warden",
-        "sync-rw-groups",
+        "sync-rw-profile",
         "--all",
         "--verge-dir",
         "/tmp/verge",
@@ -29,7 +29,7 @@ fn parse_sync_rw_groups_subcommand() {
     ]);
 
     match cli.command {
-        Some(route_warden::cli::Command::SyncRwGroups(args)) => {
+        Some(route_warden::cli::Command::SyncRwProfile(args)) => {
             assert!(args.all);
             assert!(args.dry_run);
             assert_eq!(

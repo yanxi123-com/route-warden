@@ -22,18 +22,19 @@ pub struct Cli {
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
     #[command(
-        name = "sync-rw-groups",
-        about = "写入 Clash Verge Profile Enhancement 的 RW_* 组模板"
+        name = "sync-rw-profile",
+        visible_alias = "sync-rw-groups",
+        about = "写入 Clash Verge Profile Enhancement 的 RW_* 组与路由规则模板"
     )]
-    SyncRwGroups(SyncRwGroupsArgs),
+    SyncRwProfile(SyncRwProfileArgs),
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct SyncRwGroupsArgs {
+pub struct SyncRwProfileArgs {
     #[arg(long, help = "Clash Verge 数据目录")]
     pub verge_dir: Option<PathBuf>,
 
-    #[arg(long, help = "同步所有远程订阅对应的 groups 增强文件")]
+    #[arg(long, help = "同步所有远程订阅对应的 enhancement 文件")]
     pub all: bool,
 
     #[arg(long, help = "仅显示将要写入的文件，不真正写入")]
