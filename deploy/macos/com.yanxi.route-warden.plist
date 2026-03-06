@@ -7,9 +7,9 @@
 
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/yanxi/git/yanxi/route-warden/target/release/route-warden</string>
+    <string>/Users/yanxi/.cargo/bin/route-warden</string>
     <string>--config</string>
-    <string>/Users/yanxi/git/yanxi/route-warden/examples/config.example.yaml</string>
+    <string>/Users/yanxi/.route-warden/config.yaml</string>
   </array>
 
   <key>RunAtLoad</key>
@@ -19,7 +19,7 @@
   <true/>
 
   <key>WorkingDirectory</key>
-  <string>/Users/yanxi/git/yanxi/route-warden</string>
+  <string>/Users/yanxi</string>
 
   <key>StandardOutPath</key>
   <string>/tmp/route-warden.out.log</string>

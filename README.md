@@ -32,5 +32,41 @@ route-warden --help
 `examples/config.example.yaml` 中的 `probe.proxy_url` 可配置探测代理地址（例如改端口）。
 默认配置路径：`~/.route-warden/config.yaml`（可通过 `--config` 覆盖）。
 
+## macOS 常驻运行（launchd）
+
+以下步骤适用于已执行过 `cargo install --path .`（`route-warden` 已在 PATH）：
+
+```bash
+# 1) 准备配置
+mkdir -p ~/.route-warden
+cp examples/config.example.yaml ~/.route-warden/config.yaml
+
+# 2) 同步 Clash Verge profile 增强（注意 --config 是顶层参数，要放在子命令前）
+route-warden --config ~/.route-warden/config.yaml sync-rw-profile
+
+# 3) 安装 LaunchAgent
+cp deploy/macos/com.yanxi.route-warden.plist ~/Library/LaunchAgents/
+
+# 4) 根据本机实际路径修改 plist（可用 which route-warden 查看）
+# ProgramArguments[0] -> route-warden 绝对路径（例如 /Users/<you>/.cargo/bin/route-warden）
+# ProgramArguments[2] -> /Users/<you>/.route-warden/config.yaml
+
+# 5) 重载并启动
+launchctl unload ~/Library/LaunchAgents/com.yanxi.route-warden.plist 2>/dev/null || true
+launchctl load ~/Library/LaunchAgents/com.yanxi.route-warden.plist
+launchctl start com.yanxi.route-warden
+
+# 6) 查看状态与日志
+launchctl list | rg route-warden
+tail -f /tmp/route-warden.out.log /tmp/route-warden.err.log
+```
+
+停止/重启：
+
+```bash
+launchctl stop com.yanxi.route-warden
+launchctl start com.yanxi.route-warden
+```
+
 更多部署细节见 [docs/runbook.md](docs/runbook.md)。
 节点生效验证见 [docs/verify-clash-verge-node.md](docs/verify-clash-verge-node.md)。
