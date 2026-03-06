@@ -56,7 +56,8 @@ pub fn score_nodes(stats: &[NodeStats], weights: ScoreWeights) -> Vec<NodeScore>
             let p50_score = invert_ms(p50_ms);
             let p95_score = invert_ms(p95_ms);
             let jitter_score = invert_ms(jitter_ms);
-            let penalty = (item.consecutive_failures as f64 * 0.1).min(1.0) * weights.failure_penalty_weight;
+            let penalty =
+                (item.consecutive_failures as f64 * 0.1).min(1.0) * weights.failure_penalty_weight;
 
             let score = weights.availability_weight * availability_score
                 + weights.p50_weight * p50_score

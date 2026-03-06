@@ -41,6 +41,7 @@ async fn list_proxies_and_get_group_members() {
         .and(path("/proxies/GLOBAL"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "name": "GLOBAL",
+            "now": "NodeA",
             "all": ["NodeA", "NodeB"]
         })))
         .mount(&server)
@@ -52,6 +53,9 @@ async fn list_proxies_and_get_group_members() {
 
     let members = client.get_group_members("GLOBAL").await.unwrap();
     assert_eq!(members, vec!["NodeA".to_string(), "NodeB".to_string()]);
+
+    let current = client.get_group_current("GLOBAL").await.unwrap();
+    assert_eq!(current, "NodeA".to_string());
 }
 
 #[tokio::test]

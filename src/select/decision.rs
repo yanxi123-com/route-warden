@@ -16,8 +16,14 @@ pub struct DecisionInput {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
-    Keep { reason: String },
-    Switch { from: String, to: String, reason: String },
+    Keep {
+        reason: String,
+    },
+    Switch {
+        from: String,
+        to: String,
+        reason: String,
+    },
 }
 
 pub fn make_decision(input: &DecisionInput) -> Decision {

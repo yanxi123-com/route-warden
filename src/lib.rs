@@ -1,3 +1,4 @@
+pub mod app;
 pub mod clash_verge;
 pub mod cli;
 pub mod config;

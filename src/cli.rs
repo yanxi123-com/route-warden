@@ -15,7 +15,7 @@ pub struct Cli {
     #[arg(long, help = "仅探测和评分，不执行切换")]
     pub dry_run: bool,
 
-    #[arg(long, default_value = "config.yaml", help = "配置文件路径")]
+    #[arg(long, default_value_os_t = default_config_path(), help = "配置文件路径")]
     pub config: PathBuf,
 }
 
@@ -50,4 +50,12 @@ where
     T: Into<std::ffi::OsString> + Clone,
 {
     Cli::parse_from(itr)
+}
+
+fn default_config_path() -> PathBuf {
+    let home = std::env::var_os("HOME").unwrap_or_default();
+    let mut path = PathBuf::from(home);
+    path.push(".route-warden");
+    path.push("config.yaml");
+    path
 }

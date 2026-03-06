@@ -76,6 +76,16 @@ impl ControllerClient {
         Ok(members)
     }
 
+    pub async fn get_group_current(&self, group: &str) -> Result<String> {
+        let path = format!("/proxies/{group}");
+        let value = self.get_json(&path).await?;
+        let now = value
+            .get("now")
+            .and_then(Value::as_str)
+            .context("响应缺少 now 字段")?;
+        Ok(now.to_string())
+    }
+
     pub async fn switch_group(&self, group: &str, node: &str) -> Result<()> {
         if group.trim().is_empty() {
             bail!("group 不能为空");

@@ -5,8 +5,8 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 pub use types::{
-    Config, ControllerConfig, GroupConfig, LoggingConfig, RoutingConfig, ScoringConfig,
-    TargetConfig,
+    Config, ControllerConfig, GroupConfig, LoggingConfig, ProbeConfig, RoutingConfig,
+    ScoringConfig, TargetConfig,
 };
 
 pub fn load_from_path(path: impl AsRef<Path>) -> Result<Config> {

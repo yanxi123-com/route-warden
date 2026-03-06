@@ -1,4 +1,5 @@
-fn main() {
+#[tokio::main]
+async fn main() {
     let cli = route_warden::cli::parse();
 
     if let Some(command) = cli.command.clone() {
@@ -27,13 +28,10 @@ fn main() {
         }
     }
 
-    println!(
-        "route-warden {} (once={}, dry_run={}, config={})",
-        route_warden::app_version(),
-        cli.once,
-        cli.dry_run,
-        cli.config.display()
-    );
+    if let Err(err) = route_warden::app::run(cli).await {
+        eprintln!("route-warden failed: {err:#}");
+        std::process::exit(1);
+    }
 }
 
 fn default_clash_verge_dir() -> std::path::PathBuf {

@@ -6,6 +6,7 @@ use serde::Deserialize;
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub controller: Option<ControllerConfig>,
+    pub probe: Option<ProbeConfig>,
     pub interval_sec: u64,
     pub cooldown_sec: u64,
     pub min_wins: u32,
@@ -37,6 +38,12 @@ impl Config {
         if !self.groups.contains_key("GLOBAL_BEST") {
             bail!("groups 必须包含 GLOBAL_BEST");
         }
+        if let Some(probe) = &self.probe
+            && let Some(proxy_url) = &probe.proxy_url
+            && proxy_url.trim().is_empty()
+        {
+            bail!("probe.proxy_url 不能为空字符串");
+        }
 
         for (name, items) in &self.targets {
             if items.is_empty() {
@@ -50,6 +57,11 @@ impl Config {
         }
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProbeConfig {
+    pub proxy_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

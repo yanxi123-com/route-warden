@@ -2,6 +2,9 @@ controller:
   base_url: "http://127.0.0.1:9090"
   secret: ""
 
+probe:
+  proxy_url: "http://127.0.0.1:7890"
+
 interval_sec: 180
 cooldown_sec: 600
 min_wins: 3

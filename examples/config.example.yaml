@@ -3,6 +3,10 @@ controller:
   base_url: "unix:///tmp/verge/verge-mihomo.sock"
   secret: ""
 
+probe:
+  # 探测时使用的代理（可按需改端口，例如 7899）
+  proxy_url: "http://127.0.0.1:7890"
+
 interval_sec: 180
 cooldown_sec: 600
 min_wins: 3

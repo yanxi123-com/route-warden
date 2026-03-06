@@ -7,6 +7,7 @@ cargo build --release
 ```
 
 产物：`target/release/route-warden`
+默认配置路径：`~/.route-warden/config.yaml`（可通过 `--config` 覆盖）。
 
 ## 2. 同步 Clash Verge 的 RW 组模板
 
@@ -31,8 +32,18 @@ cargo build --release
 ## 3. 本地试运行
 
 ```bash
-./target/release/route-warden --config examples/config.example.yaml --once --dry-run
+./target/release/route-warden --once --dry-run
 ```
+
+`examples/config.example.yaml` 关键项：
+- `controller.base_url`：Clash controller 地址（支持 `unix:///tmp/verge/verge-mihomo.sock`）
+- `probe.proxy_url`：探测流量走的本地代理地址（默认 `http://127.0.0.1:7890`，可改端口）
+
+每轮会写入 SQLite（与配置同目录同名 `.sqlite3`）：
+- `rounds`：轮次开始/结束与状态
+- `probes`：每次探测明细
+- `group_state`：各组当前节点与冷却状态
+- `switch_events`：切换事件日志
 
 ## 4. 常驻运行（macOS launchd）
 

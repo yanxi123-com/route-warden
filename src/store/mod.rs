@@ -1,3 +1,3 @@
 mod sqlite;
 
-pub use sqlite::{GroupStateRecord, SqliteStore, SwitchEventRecord};
+pub use sqlite::{GroupStateRecord, ProbeRecord, RoundRecord, SqliteStore, SwitchEventRecord};
