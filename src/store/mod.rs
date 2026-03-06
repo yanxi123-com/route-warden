@@ -1,1 +1,3 @@
-//! 持久化模块（SQLite）。
+mod sqlite;
+
+pub use sqlite::{GroupStateRecord, SqliteStore, SwitchEventRecord};
