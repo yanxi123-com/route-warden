@@ -1,0 +1,13 @@
+interval_sec: 0
+cooldown_sec: 600
+min_wins: 3
+min_improvement: 0.15
+
+groups:
+  GOOGLE_GROUP:
+    strategy_group: "GOOGLE"
+
+targets:
+  GOOGLE_GROUP:
+    - name: "google"
+      url: ""

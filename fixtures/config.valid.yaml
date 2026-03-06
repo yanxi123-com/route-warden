@@ -1,0 +1,38 @@
+controller:
+  base_url: "http://127.0.0.1:9090"
+  secret: ""
+
+interval_sec: 180
+cooldown_sec: 600
+min_wins: 3
+min_improvement: 0.15
+
+groups:
+  GLOBAL_BEST:
+    strategy_group: "GLOBAL"
+  GOOGLE_GROUP:
+    strategy_group: "GOOGLE"
+
+targets:
+  GLOBAL_BEST:
+    - name: "binance"
+      url: "https://api.binance.com/api/v3/time"
+      method: "GET"
+      timeout_ms: 8000
+      success_status: [200, 403]
+  GOOGLE_GROUP:
+    - name: "google"
+      url: "https://www.google.com/generate_204"
+
+scoring:
+  availability_weight: 0.7
+  p50_weight: 0.15
+  p95_weight: 0.1
+  jitter_weight: 0.05
+
+routing:
+  domain_to_group:
+    "api.binance.com": "GLOBAL_BEST"
+
+logging:
+  level: "info"
