@@ -1,1 +1,3 @@
-//! 选择与切换判定模块（防抖）。
+mod decision;
+
+pub use decision::{Decision, DecisionInput, make_decision};
