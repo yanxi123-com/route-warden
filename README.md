@@ -16,7 +16,11 @@
 
 ```bash
 cargo test
+cargo run -- sync-rw-groups --dry-run
+cargo run -- sync-rw-groups
 cargo run -- --config examples/config.example.yaml --once --dry-run
 ```
+
+`sync-rw-groups` 用于把 `RW_*` 组模板写入 Clash Verge 的 `Profile Enhancement -> Groups` 文件。
 
 更多部署细节见 [docs/runbook.md](docs/runbook.md)。

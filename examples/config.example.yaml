@@ -1,5 +1,6 @@
 controller:
-  base_url: "http://127.0.0.1:9090"
+  # Clash Verge 默认可通过 Unix Socket 暴露 controller
+  base_url: "unix:///tmp/verge/verge-mihomo.sock"
   secret: ""
 
 interval_sec: 180
@@ -8,16 +9,17 @@ min_wins: 3
 min_improvement: 0.15
 
 groups:
+  # 建议在 Clash Profile Enhancement Groups 里预置 RW_* 组
   GOOGLE_GROUP:
-    strategy_group: "GOOGLE"
+    strategy_group: "RW_GOOGLE"
   BINANCE_GROUP:
-    strategy_group: "BINANCE"
+    strategy_group: "RW_BINANCE"
   OPENAI_GROUP:
-    strategy_group: "OPENAI"
+    strategy_group: "RW_OPENAI"
   GITHUB_GROUP:
-    strategy_group: "GITHUB"
+    strategy_group: "RW_GITHUB"
   GLOBAL_BEST:
-    strategy_group: "GLOBAL"
+    strategy_group: "RW_GLOBAL"
 
 targets:
   GOOGLE_GROUP:

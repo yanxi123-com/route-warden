@@ -4,22 +4,48 @@ use serde_json::Value;
 
 #[derive(Debug, Clone)]
 pub struct ControllerClient {
-    base_url: String,
+    request_base: String,
     secret: Option<String>,
     http: Client,
 }
 
 impl ControllerClient {
     pub fn new(base_url: &str, secret: Option<String>) -> Result<Self> {
-        let base = base_url.trim_end_matches('/').to_string();
-        if base.is_empty() {
+        let raw = base_url.trim();
+        if raw.is_empty() {
+            bail!("controller base_url 不能为空");
+        }
+
+        let (request_base, http) = if let Some(path) = raw.strip_prefix("unix://") {
+            #[cfg(unix)]
+            {
+                let socket_path = path.trim();
+                if socket_path.is_empty() {
+                    bail!("unix socket 路径不能为空");
+                }
+                let client = Client::builder()
+                    .unix_socket(socket_path)
+                    .build()
+                    .context("创建 unix socket controller 客户端失败")?;
+                ("http://localhost".to_string(), client)
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = path;
+                bail!("当前平台不支持 unix:// controller");
+            }
+        } else {
+            (raw.trim_end_matches('/').to_string(), Client::new())
+        };
+
+        if request_base.is_empty() {
             bail!("controller base_url 不能为空");
         }
 
         Ok(Self {
-            base_url: base,
+            request_base,
             secret,
-            http: Client::new(),
+            http,
         })
     }
 
@@ -58,8 +84,11 @@ impl ControllerClient {
             bail!("node 不能为空");
         }
 
-        let url = format!("{}/proxies/{}", self.base_url, group);
-        let mut req = self.http.put(url).json(&serde_json::json!({ "name": node }));
+        let url = format!("{}/proxies/{}", self.request_base, group);
+        let mut req = self
+            .http
+            .put(url)
+            .json(&serde_json::json!({ "name": node }));
         if let Some(secret) = &self.secret {
             req = req.bearer_auth(secret);
         }
@@ -74,7 +103,7 @@ impl ControllerClient {
     }
 
     async fn get_json(&self, path: &str) -> Result<Value> {
-        let url = format!("{}{}", self.base_url, path);
+        let url = format!("{}{}", self.request_base, path);
         let mut req = self.http.get(url);
         if let Some(secret) = &self.secret {
             req = req.bearer_auth(secret);
@@ -85,6 +114,9 @@ impl ControllerClient {
             let body = response.text().await.unwrap_or_default();
             bail!("controller 返回错误: status={status}, body={body}");
         }
-        response.json().await.context("解析 controller 响应 JSON 失败")
+        response
+            .json()
+            .await
+            .context("解析 controller 响应 JSON 失败")
     }
 }
