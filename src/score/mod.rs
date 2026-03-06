@@ -1,1 +1,3 @@
-//! 评分模块（可用性优先）。
+mod scorer;
+
+pub use scorer::{NodeScore, NodeStats, ScoreWeights, score_nodes};
