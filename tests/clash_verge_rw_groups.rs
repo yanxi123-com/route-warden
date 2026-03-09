@@ -78,6 +78,26 @@ items:
     assert!(rules.contains("DOMAIN,api.binance.com,RW_BINANCE"));
     assert!(rules.contains("GEOIP,CN,RW_CN_DIRECT,no-resolve"));
     assert!(rules.contains("MATCH,RW_GLOBAL"));
+
+    let parsed: serde_yaml::Value = serde_yaml::from_str(&rules).expect("rules yaml parse");
+    let prepend = parsed
+        .get("prepend")
+        .and_then(serde_yaml::Value::as_sequence)
+        .expect("prepend should exist");
+    assert!(
+        prepend
+            .iter()
+            .any(|v| v.as_str() == Some("DOMAIN,api.openai.com,RW_OPENAI")),
+        "DOMAIN rule should be written into prepend to take priority over early MATCH rules"
+    );
+    let append = parsed
+        .get("append")
+        .and_then(serde_yaml::Value::as_sequence)
+        .expect("append should exist");
+    assert!(
+        append.is_empty(),
+        "append should remain empty for managed route rules"
+    );
 }
 
 #[test]

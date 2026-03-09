@@ -174,7 +174,10 @@ fn upsert_rules_file(path: &Path, config: &Config) -> Result<()> {
         .into_iter()
         .map(serde_yaml::Value::String)
         .collect();
-    tpl.append = desired;
+    // Place managed route rules in prepend so they run before subscription rules
+    // that may contain early MATCH catch-all entries.
+    tpl.prepend = desired;
+    tpl.append.clear();
 
     write_template_file(path, &tpl, "sync-rw-profile", "rules")
 }
