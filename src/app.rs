@@ -8,7 +8,6 @@ use comfy_table::{ContentArrangement, Table, presets::UTF8_FULL_CONDENSED};
 use reqwest::{Client, Proxy};
 #[cfg(test)]
 use std::future::Future;
-#[cfg(test)]
 use tokio::task::JoinSet;
 
 use crate::cli::Cli;
@@ -150,16 +149,10 @@ async fn run_one_round(
 
         // All probe traffic goes through one probe strategy group (RW_PROBE by default),
         // so probing must be serialized to avoid concurrent group races.
-        let mut rounds = Vec::with_capacity(jobs.len());
         for job in jobs {
-            rounds.push(
+            let group_round =
                 probe_group_candidates(job, controller, probe_client, &probe_strategy_group)
-                    .await?,
-            );
-        }
-        rounds.sort_by(|a, b| a.group_key.cmp(&b.group_key));
-
-        for group_round in rounds {
+                    .await?;
             apply_group_round(
                 round_id,
                 group_round,
@@ -252,19 +245,31 @@ async fn probe_group_candidates(
 
             let mut success = 0_usize;
             let mut latencies_ms = Vec::with_capacity(job.targets.len());
+            let mut target_set = JoinSet::new();
             for target in &job.targets {
-                let result = crate::probe::probe_target(
-                    probe_client,
-                    &target.name,
-                    &target.method,
-                    &target.url,
-                    Duration::from_millis(target.timeout_ms),
-                )
-                .await
-                .with_context(|| format!("探测失败: node={node}, target={}", target.name))?;
+                let target = target.clone();
+                let node_name = node.clone();
+                let probe_client = probe_client.clone();
+                target_set.spawn(async move {
+                    let result = crate::probe::probe_target(
+                        &probe_client,
+                        &target.name,
+                        &target.method,
+                        &target.url,
+                        Duration::from_millis(target.timeout_ms),
+                    )
+                    .await
+                    .with_context(|| format!("探测失败: node={node_name}, target={}", target.name))?;
+
+                    Ok::<(TargetConfig, crate::probe::ProbeResult), anyhow::Error>((target, result))
+                });
+            }
+
+            while let Some(joined) = target_set.join_next().await {
+                let (target, result) = joined.context("探测任务执行失败")??;
 
                 let ok = match result.status_code {
-                    Some(status) => match_target_success(target, status, result.is_success),
+                    Some(status) => match_target_success(&target, status, result.is_success),
                     None => false,
                 };
                 let failure_kind = if ok {
@@ -926,6 +931,91 @@ targets:
 
         assert_eq!(openai_switches, 0, "probe should not touch strategy group");
         assert!(probe_switches >= 1, "probe should switch probe group during tests");
+    }
+
+    #[tokio::test]
+    async fn probe_targets_run_in_parallel_within_node() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/proxies/RW_OPENAI"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "name": "RW_OPENAI",
+                "now": "NodeA",
+                "all": ["NodeA"]
+            })))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/proxies/RW_PROBE"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "name": "RW_PROBE",
+                "now": "ProbeStart",
+                "all": ["NodeA"]
+            })))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("PUT"))
+            .and(path("/proxies/RW_PROBE"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/slow-a"))
+            .respond_with(
+                ResponseTemplate::new(200).set_delay(std::time::Duration::from_millis(220)),
+            )
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/slow-b"))
+            .respond_with(
+                ResponseTemplate::new(200).set_delay(std::time::Duration::from_millis(220)),
+            )
+            .mount(&server)
+            .await;
+
+        let controller = ControllerClient::new(&server.uri(), None).expect("controller");
+        let probe_client = reqwest::Client::new();
+        let job = super::GroupProbeJob {
+            group_key: "OPENAI_GROUP".to_string(),
+            strategy_group: "RW_OPENAI".to_string(),
+            targets: vec![
+                TargetConfig {
+                    name: "slow-a".to_string(),
+                    url: format!("{}/slow-a", server.uri()),
+                    method: "GET".to_string(),
+                    timeout_ms: 5_000,
+                    success_status: vec![200],
+                },
+                TargetConfig {
+                    name: "slow-b".to_string(),
+                    url: format!("{}/slow-b", server.uri()),
+                    method: "GET".to_string(),
+                    timeout_ms: 5_000,
+                    success_status: vec![200],
+                },
+            ],
+        };
+
+        let started = Instant::now();
+        let result = super::probe_group_candidates(job, &controller, &probe_client, "RW_PROBE")
+            .await
+            .expect("probe should complete");
+        let elapsed = started.elapsed();
+
+        assert_eq!(result.stats.len(), 1);
+        assert_eq!(result.stats[0].total, 2);
+        assert_eq!(result.stats[0].success, 2);
+        assert!(
+            elapsed < Duration::from_millis(380),
+            "expected parallel probe to finish under 380ms, got {:?}",
+            elapsed
+        );
     }
 
     #[test]
