@@ -55,6 +55,12 @@ impl Config {
         {
             bail!("probe.proxy_url 不能为空字符串");
         }
+        if let Some(probe) = &self.probe
+            && let Some(strategy_group) = &probe.strategy_group
+            && strategy_group.trim().is_empty()
+        {
+            bail!("probe.strategy_group 不能为空字符串");
+        }
 
         for (name, items) in &self.targets {
             if items.is_empty() {
@@ -93,6 +99,7 @@ impl Config {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProbeConfig {
     pub proxy_url: Option<String>,
+    pub strategy_group: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -154,6 +161,7 @@ fn default_controller() -> Option<ControllerConfig> {
 fn default_probe() -> Option<ProbeConfig> {
     Some(ProbeConfig {
         proxy_url: Some("http://127.0.0.1:7890".to_string()),
+        strategy_group: Some("RW_PROBE".to_string()),
     })
 }
 

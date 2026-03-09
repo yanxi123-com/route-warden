@@ -71,6 +71,7 @@ items:
     assert!(groups.contains("name: RW_GITHUB"));
     assert!(groups.contains("name: RW_GLOBAL"));
     assert!(groups.contains("name: RW_CN_DIRECT"));
+    assert!(groups.contains("name: RW_PROBE"));
 
     let rules = fs::read_to_string(verge_dir.join("profiles").join("g-current-rules.yaml"))
         .expect("read rules");
@@ -89,6 +90,12 @@ items:
             .iter()
             .any(|v| v.as_str() == Some("DOMAIN,api.openai.com,RW_OPENAI")),
         "DOMAIN rule should be written into prepend to take priority over early MATCH rules"
+    );
+    assert!(
+        prepend
+            .iter()
+            .any(|v| v.as_str() == Some("PROCESS-NAME,route-warden,RW_PROBE")),
+        "route-warden process traffic should be routed to probe group"
     );
     let append = parsed
         .get("append")
@@ -139,6 +146,10 @@ items:
         fs::read_to_string(verge_dir.join("profiles").join("g-other-rules.yaml")).unwrap();
     assert!(current_groups.contains("RW_GLOBAL"));
     assert!(other_groups.contains("RW_GLOBAL"));
+    assert!(current_groups.contains("RW_PROBE"));
+    assert!(other_groups.contains("RW_PROBE"));
     assert!(current_rules.contains("MATCH,RW_GLOBAL"));
     assert!(other_rules.contains("MATCH,RW_GLOBAL"));
+    assert!(current_rules.contains("PROCESS-NAME,route-warden,RW_PROBE"));
+    assert!(other_rules.contains("PROCESS-NAME,route-warden,RW_PROBE"));
 }

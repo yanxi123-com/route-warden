@@ -6,6 +6,8 @@ controller:
 probe:
   # 探测时使用的代理（可按需改端口，例如 7899）
   proxy_url: "http://127.0.0.1:7890"
+  # 探测专用策略组，route-warden 会只切这个组，不改业务组
+  strategy_group: "RW_PROBE"
 
 interval_sec: 180
 cooldown_sec: 600

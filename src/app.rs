@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -7,6 +6,9 @@ use anyhow::{Context, Result, anyhow};
 use chrono::{Duration as ChronoDuration, Local, TimeZone};
 use comfy_table::{ContentArrangement, Table, presets::UTF8_FULL_CONDENSED};
 use reqwest::{Client, Proxy};
+#[cfg(test)]
+use std::future::Future;
+#[cfg(test)]
 use tokio::task::JoinSet;
 
 use crate::cli::Cli;
@@ -132,6 +134,7 @@ async fn run_one_round(
     let round_id = store.start_round(started_at)?;
 
     let result: Result<()> = async {
+        let probe_strategy_group = probe_strategy_group(config).to_string();
         let mut jobs = Vec::with_capacity(config.groups.len());
         for (group_key, group_cfg) in &config.groups {
             let Some(targets) = config.targets.get(group_key) else {
@@ -145,14 +148,15 @@ async fn run_one_round(
             });
         }
 
-        let controller_for_jobs = controller.clone();
-        let probe_client = probe_client.clone();
-        let mut rounds = run_jobs_in_parallel(jobs, move |job| {
-            let controller = controller_for_jobs.clone();
-            let probe_client = probe_client.clone();
-            async move { probe_group_candidates(job, &controller, &probe_client).await }
-        })
-        .await?;
+        // All probe traffic goes through one probe strategy group (RW_PROBE by default),
+        // so probing must be serialized to avoid concurrent group races.
+        let mut rounds = Vec::with_capacity(jobs.len());
+        for job in jobs {
+            rounds.push(
+                probe_group_candidates(job, controller, probe_client, &probe_strategy_group)
+                    .await?,
+            );
+        }
         rounds.sort_by(|a, b| a.group_key.cmp(&b.group_key));
 
         for group_round in rounds {
@@ -176,6 +180,7 @@ async fn run_one_round(
     result
 }
 
+#[cfg(test)]
 async fn run_jobs_in_parallel<J, T, F, Fut>(jobs: Vec<J>, runner: F) -> Result<Vec<T>>
 where
     J: Send + 'static,
@@ -201,6 +206,7 @@ async fn probe_group_candidates(
     job: GroupProbeJob,
     controller: &ControllerClient,
     probe_client: &Client,
+    probe_strategy_group: &str,
 ) -> Result<GroupProbeRound> {
     let group_key = &job.group_key;
     let strategy_group = &job.strategy_group;
@@ -227,13 +233,21 @@ async fn probe_group_candidates(
 
     let mut stats = Vec::with_capacity(candidates.len());
     let mut probes = Vec::with_capacity(candidates.len().saturating_mul(job.targets.len()));
+    let probe_current_node = controller
+        .get_group_current(probe_strategy_group)
+        .await
+        .with_context(|| {
+            format!(
+                "读取探测组当前节点失败: group={probe_strategy_group}（请确认已 sync-rw-profile 并重载配置）"
+            )
+        })?;
     let probe_result: Result<()> = async {
         for node in &candidates {
             controller
-                .switch_group(strategy_group, node)
+                .switch_group(probe_strategy_group, node)
                 .await
                 .with_context(|| {
-                    format!("切换到探测节点失败: group={strategy_group}, node={node}")
+                    format!("切换到探测节点失败: group={probe_strategy_group}, node={node}")
                 })?;
 
             let mut success = 0_usize;
@@ -294,9 +308,11 @@ async fn probe_group_candidates(
     .await;
 
     let restore_result = controller
-        .switch_group(strategy_group, &current_node)
+        .switch_group(probe_strategy_group, &probe_current_node)
         .await
-        .with_context(|| format!("恢复当前节点失败: group={strategy_group}, node={current_node}"));
+        .with_context(|| {
+            format!("恢复探测组节点失败: group={probe_strategy_group}, node={probe_current_node}")
+        });
     match (probe_result, restore_result) {
         (Err(probe_err), Err(restore_err)) => {
             return Err(anyhow!(
@@ -463,6 +479,15 @@ fn build_probe_client(config: &Config) -> Result<Client> {
         .proxy(Proxy::all(proxy_url).context("无效的探测代理地址")?)
         .build()
         .context("创建探测 HTTP 客户端失败")
+}
+
+fn probe_strategy_group(config: &Config) -> &str {
+    config
+        .probe
+        .as_ref()
+        .and_then(|v| v.strategy_group.as_deref())
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or("RW_PROBE")
 }
 
 fn filter_candidates(nodes: &[String]) -> Vec<String> {
@@ -668,10 +693,15 @@ struct MinuteReportRow {
 mod tests {
     use std::time::{Duration, Instant};
 
+    use serde_json::json;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
     use super::{
         RuntimeMemory, collect_minute_report_rows, filter_candidates, match_target_success,
     };
     use crate::config::TargetConfig;
+    use crate::controller::ControllerClient;
     use crate::store::{GroupStateRecord, ProbeRecord, SqliteStore};
 
     #[test]
@@ -822,5 +852,86 @@ targets:
 
         assert_eq!(out.len(), 3);
         assert!(started.elapsed() < Duration::from_millis(170));
+    }
+
+    #[tokio::test]
+    async fn probe_uses_probe_group_instead_of_strategy_group() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/proxies/RW_OPENAI"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "name": "RW_OPENAI",
+                "now": "NodeA",
+                "all": ["NodeA", "NodeB"]
+            })))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/proxies/RW_PROBE"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "name": "RW_PROBE",
+                "now": "ProbeStart",
+                "all": ["NodeA", "NodeB"]
+            })))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("PUT"))
+            .and(path("/proxies/RW_OPENAI"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("PUT"))
+            .and(path("/proxies/RW_PROBE"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/probe-ok"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let controller = ControllerClient::new(&server.uri(), None).expect("controller");
+        let probe_client = reqwest::Client::new();
+        let job = super::GroupProbeJob {
+            group_key: "OPENAI_GROUP".to_string(),
+            strategy_group: "RW_OPENAI".to_string(),
+            targets: vec![TargetConfig {
+                name: "openai".to_string(),
+                url: format!("{}/probe-ok", server.uri()),
+                method: "GET".to_string(),
+                timeout_ms: 5_000,
+                success_status: vec![200],
+            }],
+        };
+
+        let _ = super::probe_group_candidates(job, &controller, &probe_client, "RW_PROBE")
+            .await
+            .expect("probe should complete");
+
+        let requests = server.received_requests().await.expect("requests");
+        let openai_switches = requests
+            .iter()
+            .filter(|r| r.method.as_str() == "PUT" && r.url.path() == "/proxies/RW_OPENAI")
+            .count();
+        let probe_switches = requests
+            .iter()
+            .filter(|r| r.method.as_str() == "PUT" && r.url.path() == "/proxies/RW_PROBE")
+            .count();
+
+        assert_eq!(openai_switches, 0, "probe should not touch strategy group");
+        assert!(probe_switches >= 1, "probe should switch probe group during tests");
+    }
+
+    #[test]
+    fn probe_strategy_group_defaults_to_rw_probe() {
+        let cfg: crate::config::Config =
+            serde_yaml::from_str("{}").expect("default config should parse");
+        assert_eq!(super::probe_strategy_group(&cfg), "RW_PROBE");
     }
 }

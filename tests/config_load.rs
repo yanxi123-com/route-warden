@@ -62,6 +62,7 @@ fn load_default_config_matches_example_profile() {
 
     let probe = cfg.probe.expect("probe defaults");
     assert_eq!(probe.proxy_url, Some("http://127.0.0.1:7890".to_string()));
+    assert_eq!(probe.strategy_group, Some("RW_PROBE".to_string()));
 
     assert_eq!(
         cfg.groups

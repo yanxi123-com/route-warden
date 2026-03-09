@@ -226,6 +226,12 @@ fn desired_groups() -> Vec<GroupEntry> {
             include_all: Some(true),
         },
         GroupEntry {
+            name: "RW_PROBE".to_string(),
+            group_type: "select".to_string(),
+            proxies: None,
+            include_all: Some(true),
+        },
+        GroupEntry {
             name: "RW_GITHUB".to_string(),
             group_type: "select".to_string(),
             proxies: None,
@@ -241,7 +247,10 @@ fn desired_groups() -> Vec<GroupEntry> {
 }
 
 fn desired_rules(config: &Config) -> Result<Vec<String>> {
-    let mut rules = Vec::new();
+    let mut rules = vec![
+        "PROCESS-NAME,route-warden,RW_PROBE".to_string(),
+        "PROCESS-NAME,route_warden,RW_PROBE".to_string(),
+    ];
     if let Some(routing) = &config.routing {
         for (domain, group_ref) in &routing.domain_to_group {
             let normalized = domain.trim();
