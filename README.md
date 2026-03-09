@@ -64,8 +64,15 @@ tail -f /tmp/route-warden.out.log /tmp/route-warden.err.log
 停止/重启：
 
 ```bash
+# 如果设置了 KeepAlive, 会被重新拉起
 launchctl stop com.yanxi.route-warden
 launchctl start com.yanxi.route-warden
+
+# 真正暂停
+launchctl bootout gui/$(id -u)/com.yanxi.route-warden
+
+# 标准恢复
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.yanxi.route-warden.plist
 ```
 
 更多部署细节见 [docs/runbook.md](docs/runbook.md)。
