@@ -53,7 +53,7 @@ fn load_default_config_matches_example_profile() {
     let cfg = route_warden::config::load_from_path(&config_path).expect("load defaults");
     assert_eq!(cfg.interval_sec, 180);
     assert_eq!(cfg.cooldown_sec, 600);
-    assert_eq!(cfg.min_wins, 3);
+    assert_eq!(cfg.min_wins, 2);
     assert!((cfg.min_improvement - 0.15).abs() < f64::EPSILON);
 
     let controller = cfg.controller.expect("controller defaults");

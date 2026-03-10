@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -73,6 +73,34 @@ struct GroupProbeRound {
     probes: Vec<GroupProbeSample>,
 }
 
+#[derive(Debug, Clone)]
+struct GroupProbeContext {
+    group_key: String,
+    strategy_group: String,
+    current_node: String,
+    candidates: Vec<String>,
+    targets: Vec<TargetConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct ProbeTargetKey {
+    name: String,
+    method: String,
+    url: String,
+    timeout_ms: u64,
+}
+
+#[derive(Debug, Clone)]
+struct SharedProbeSample {
+    status_code: Option<i64>,
+    latency_ms: f64,
+    fallback_success: bool,
+    failure_kind: Option<String>,
+    created_at: i64,
+}
+
+type SharedProbeMap = HashMap<(String, ProbeTargetKey), SharedProbeSample>;
+
 pub async fn run(cli: Cli) -> Result<()> {
     let config = config::load_from_path(&cli.config)?;
     init_logging(&config);
@@ -105,6 +133,7 @@ pub async fn run(cli: Cli) -> Result<()> {
     spawn_minute_reporter(config.clone(), db_path.clone());
 
     loop {
+        let round_started_at = std::time::Instant::now();
         if let Err(err) = run_one_round(
             &config,
             &controller,
@@ -117,7 +146,11 @@ pub async fn run(cli: Cli) -> Result<()> {
         {
             tracing::error!("round failed: {err:#}");
         }
-        tokio::time::sleep(Duration::from_secs(config.interval_sec)).await;
+        let remaining =
+            remaining_sleep_after_round(config.interval_sec, round_started_at.elapsed());
+        if !remaining.is_zero() {
+            tokio::time::sleep(remaining).await;
+        }
     }
 }
 
@@ -149,10 +182,9 @@ async fn run_one_round(
 
         // All probe traffic goes through one probe strategy group (RW_PROBE by default),
         // so probing must be serialized to avoid concurrent group races.
-        for job in jobs {
-            let group_round =
-                probe_group_candidates(job, controller, probe_client, &probe_strategy_group)
-                    .await?;
+        let group_rounds =
+            probe_groups_once(jobs, controller, probe_client, &probe_strategy_group).await?;
+        for group_round in group_rounds {
             apply_group_round(
                 round_id,
                 group_round,
@@ -195,37 +227,89 @@ where
     Ok(out)
 }
 
+#[cfg(test)]
 async fn probe_group_candidates(
     job: GroupProbeJob,
     controller: &ControllerClient,
     probe_client: &Client,
     probe_strategy_group: &str,
 ) -> Result<GroupProbeRound> {
-    let group_key = &job.group_key;
-    let strategy_group = &job.strategy_group;
-    let current_node = controller
-        .get_group_current(strategy_group)
-        .await
-        .with_context(|| format!("读取当前节点失败: group={strategy_group}"))?;
+    let mut rounds =
+        probe_groups_once(vec![job], controller, probe_client, probe_strategy_group).await?;
+    rounds.pop().context("单组探测结果为空")
+}
 
-    let members = controller
-        .get_group_members(strategy_group)
-        .await
-        .with_context(|| format!("读取组成员失败: group={strategy_group}"))?;
-    let candidates = filter_candidates(&members);
-    if candidates.is_empty() {
-        tracing::warn!("group {group_key} 候选节点为空，跳过");
-        return Ok(GroupProbeRound {
+async fn probe_groups_once(
+    jobs: Vec<GroupProbeJob>,
+    controller: &ControllerClient,
+    probe_client: &Client,
+    probe_strategy_group: &str,
+) -> Result<Vec<GroupProbeRound>> {
+    let contexts = collect_group_contexts(jobs, controller).await?;
+    let shared_samples =
+        probe_shared_samples(&contexts, controller, probe_client, probe_strategy_group).await?;
+
+    let mut rounds = Vec::with_capacity(contexts.len());
+    for context in contexts {
+        rounds.push(build_group_round_from_shared(context, &shared_samples));
+    }
+    Ok(rounds)
+}
+
+async fn collect_group_contexts(
+    jobs: Vec<GroupProbeJob>,
+    controller: &ControllerClient,
+) -> Result<Vec<GroupProbeContext>> {
+    let mut contexts = Vec::with_capacity(jobs.len());
+    for job in jobs {
+        let group_key = &job.group_key;
+        let strategy_group = &job.strategy_group;
+        let current_node = controller
+            .get_group_current(strategy_group)
+            .await
+            .with_context(|| format!("读取当前节点失败: group={strategy_group}"))?;
+
+        let members = controller
+            .get_group_members(strategy_group)
+            .await
+            .with_context(|| format!("读取组成员失败: group={strategy_group}"))?;
+        let candidates = filter_candidates(&members);
+        if candidates.is_empty() {
+            tracing::warn!("group {group_key} 候选节点为空，跳过");
+        }
+
+        contexts.push(GroupProbeContext {
             group_key: job.group_key,
             strategy_group: job.strategy_group,
             current_node,
-            stats: Vec::new(),
-            probes: Vec::new(),
+            candidates,
+            targets: job.targets,
         });
     }
+    Ok(contexts)
+}
 
-    let mut stats = Vec::with_capacity(candidates.len());
-    let mut probes = Vec::with_capacity(candidates.len().saturating_mul(job.targets.len()));
+async fn probe_shared_samples(
+    contexts: &[GroupProbeContext],
+    controller: &ControllerClient,
+    probe_client: &Client,
+    probe_strategy_group: &str,
+) -> Result<SharedProbeMap> {
+    let mut nodes = BTreeSet::new();
+    let mut targets = BTreeSet::new();
+    for context in contexts {
+        for node in &context.candidates {
+            nodes.insert(node.clone());
+        }
+        for target in &context.targets {
+            targets.insert(probe_target_key(target));
+        }
+    }
+
+    if nodes.is_empty() || targets.is_empty() {
+        return Ok(HashMap::new());
+    }
+
     let probe_current_node = controller
         .get_group_current(probe_strategy_group)
         .await
@@ -234,8 +318,10 @@ async fn probe_group_candidates(
                 "读取探测组当前节点失败: group={probe_strategy_group}（请确认已 sync-rw-profile 并重载配置）"
             )
         })?;
+
+    let mut shared_samples = HashMap::with_capacity(nodes.len().saturating_mul(targets.len()));
     let probe_result: Result<()> = async {
-        for node in &candidates {
+        for node in &nodes {
             controller
                 .switch_group(probe_strategy_group, node)
                 .await
@@ -243,11 +329,8 @@ async fn probe_group_candidates(
                     format!("切换到探测节点失败: group={probe_strategy_group}, node={node}")
                 })?;
 
-            let mut success = 0_usize;
-            let mut latencies_ms = Vec::with_capacity(job.targets.len());
             let mut target_set = JoinSet::new();
-            for target in &job.targets {
-                let target = target.clone();
+            for target in targets.iter().cloned() {
                 let node_name = node.clone();
                 let probe_client = probe_client.clone();
                 target_set.spawn(async move {
@@ -259,54 +342,29 @@ async fn probe_group_candidates(
                         Duration::from_millis(target.timeout_ms),
                     )
                     .await
-                    .with_context(|| format!("探测失败: node={node_name}, target={}", target.name))?;
+                    .with_context(|| {
+                        format!("探测失败: node={node_name}, target={}", target.name)
+                    })?;
 
-                    Ok::<(TargetConfig, crate::probe::ProbeResult), anyhow::Error>((target, result))
+                    Ok::<(ProbeTargetKey, crate::probe::ProbeResult), anyhow::Error>((
+                        target, result,
+                    ))
                 });
             }
 
             while let Some(joined) = target_set.join_next().await {
                 let (target, result) = joined.context("探测任务执行失败")??;
-
-                let ok = match result.status_code {
-                    Some(status) => match_target_success(&target, status, result.is_success),
-                    None => false,
-                };
-                let failure_kind = if ok {
-                    None
-                } else {
-                    result.failure_kind.clone().or_else(|| {
-                        result
-                            .status_code
-                            .map(|status| format!("http_status_{status}"))
-                    })
-                };
-
-                probes.push(GroupProbeSample {
-                    node_name: node.clone(),
-                    target: target.name.clone(),
-                    status_code: result.status_code.map(i64::from),
-                    latency_ms: result.latency.as_secs_f64() * 1000.0,
-                    is_success: ok,
-                    failure_kind,
-                    created_at: now_ts(),
-                });
-
-                if ok {
-                    success = success.saturating_add(1);
-                }
-                latencies_ms.push(result.latency.as_millis() as f64);
+                shared_samples.insert(
+                    (node.clone(), target),
+                    SharedProbeSample {
+                        status_code: result.status_code.map(i64::from),
+                        latency_ms: result.latency.as_secs_f64() * 1000.0,
+                        fallback_success: result.is_success,
+                        failure_kind: result.failure_kind,
+                        created_at: now_ts(),
+                    },
+                );
             }
-
-            let total = job.targets.len();
-            let consecutive_failures = if success == 0 { 1 } else { 0 };
-            stats.push(NodeStats {
-                node: node.clone(),
-                total,
-                success,
-                latencies_ms,
-                consecutive_failures,
-            });
         }
         Ok(())
     }
@@ -329,13 +387,105 @@ async fn probe_group_candidates(
         (Ok(_), Ok(_)) => {}
     }
 
-    Ok(GroupProbeRound {
-        group_key: job.group_key,
-        strategy_group: job.strategy_group,
-        current_node,
+    Ok(shared_samples)
+}
+
+fn build_group_round_from_shared(
+    context: GroupProbeContext,
+    shared_samples: &SharedProbeMap,
+) -> GroupProbeRound {
+    if context.candidates.is_empty() {
+        return GroupProbeRound {
+            group_key: context.group_key,
+            strategy_group: context.strategy_group,
+            current_node: context.current_node,
+            stats: Vec::new(),
+            probes: Vec::new(),
+        };
+    }
+
+    let mut stats = Vec::with_capacity(context.candidates.len());
+    let mut probes = Vec::with_capacity(
+        context
+            .candidates
+            .len()
+            .saturating_mul(context.targets.len()),
+    );
+    for node in &context.candidates {
+        let mut success = 0_usize;
+        let mut latencies_ms = Vec::with_capacity(context.targets.len());
+        for target in &context.targets {
+            let key = probe_target_key(target);
+            let sample = shared_samples
+                .get(&(node.clone(), key))
+                .cloned()
+                .unwrap_or_else(|| SharedProbeSample {
+                    status_code: None,
+                    latency_ms: target.timeout_ms as f64,
+                    fallback_success: false,
+                    failure_kind: Some("missing_shared_probe_sample".to_string()),
+                    created_at: now_ts(),
+                });
+
+            let ok = match sample.status_code {
+                Some(status) => {
+                    match_target_success(target, status as u16, sample.fallback_success)
+                }
+                None => false,
+            };
+            let failure_kind = if ok {
+                None
+            } else {
+                sample.failure_kind.clone().or_else(|| {
+                    sample
+                        .status_code
+                        .map(|status| format!("http_status_{status}"))
+                })
+            };
+
+            probes.push(GroupProbeSample {
+                node_name: node.clone(),
+                target: target.name.clone(),
+                status_code: sample.status_code,
+                latency_ms: sample.latency_ms,
+                is_success: ok,
+                failure_kind,
+                created_at: sample.created_at,
+            });
+
+            if ok {
+                success = success.saturating_add(1);
+            }
+            latencies_ms.push(sample.latency_ms);
+        }
+
+        let total = context.targets.len();
+        let consecutive_failures = if success == 0 { 1 } else { 0 };
+        stats.push(NodeStats {
+            node: node.clone(),
+            total,
+            success,
+            latencies_ms,
+            consecutive_failures,
+        });
+    }
+
+    GroupProbeRound {
+        group_key: context.group_key,
+        strategy_group: context.strategy_group,
+        current_node: context.current_node,
         stats,
         probes,
-    })
+    }
+}
+
+fn probe_target_key(target: &TargetConfig) -> ProbeTargetKey {
+    ProbeTargetKey {
+        name: target.name.clone(),
+        method: target.method.clone(),
+        url: target.url.clone(),
+        timeout_ms: target.timeout_ms,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -385,6 +535,15 @@ async fn apply_group_round(
 
     let now_ts = now_ts();
     let saved = store.load_group_state(&group_round.group_key)?;
+    if let Some(stored_node) = detect_external_node_drift(saved.as_ref(), &group_round.current_node)
+    {
+        tracing::info!(
+            "external-node-drift: group={}, strategy_group={}, stored_node={stored_node}, observed_node={}",
+            group_round.group_key,
+            group_round.strategy_group,
+            group_round.current_node
+        );
+    }
     let last_switch_ts = saved.as_ref().and_then(|s| s.last_switch_ts);
 
     let current_score = ranked
@@ -416,7 +575,7 @@ async fn apply_group_round(
         cooldown_sec: config.cooldown_sec,
         last_switch_ts,
         now_ts,
-        emergency_failures: 3,
+        emergency_failures: emergency_failures_threshold(),
     });
 
     let mut final_node = group_round.current_node.clone();
@@ -538,6 +697,25 @@ fn now_ts() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|v| v.as_secs() as i64)
         .unwrap_or(0)
+}
+
+fn remaining_sleep_after_round(interval_sec: u64, elapsed: Duration) -> Duration {
+    Duration::from_secs(interval_sec).saturating_sub(elapsed)
+}
+
+fn emergency_failures_threshold() -> u32 {
+    1
+}
+
+fn detect_external_node_drift(
+    saved_state: Option<&GroupStateRecord>,
+    observed_node: &str,
+) -> Option<String> {
+    let stored_node = saved_state.map(|s| s.current_node.as_str())?;
+    if stored_node == observed_node {
+        return None;
+    }
+    Some(stored_node.to_string())
 }
 
 fn spawn_minute_reporter(config: Config, db_path: PathBuf) {
@@ -719,6 +897,41 @@ mod tests {
     }
 
     #[test]
+    fn detect_external_node_drift_returns_none_without_saved_state() {
+        assert_eq!(super::detect_external_node_drift(None, "Node-B"), None);
+    }
+
+    #[test]
+    fn detect_external_node_drift_returns_none_when_node_unchanged() {
+        let saved = GroupStateRecord {
+            group_name: "OPENAI_GROUP".to_string(),
+            current_node: "Node-A".to_string(),
+            last_switch_ts: Some(1_000),
+            cooldown_until_ts: Some(1_600),
+            updated_at: 1_200,
+        };
+        assert_eq!(
+            super::detect_external_node_drift(Some(&saved), "Node-A"),
+            None
+        );
+    }
+
+    #[test]
+    fn detect_external_node_drift_returns_stored_node_when_changed() {
+        let saved = GroupStateRecord {
+            group_name: "OPENAI_GROUP".to_string(),
+            current_node: "Node-A".to_string(),
+            last_switch_ts: Some(1_000),
+            cooldown_until_ts: Some(1_600),
+            updated_at: 1_200,
+        };
+        assert_eq!(
+            super::detect_external_node_drift(Some(&saved), "Node-B"),
+            Some("Node-A".to_string())
+        );
+    }
+
+    #[test]
     fn filter_builtin_reject_like_nodes() {
         let out = filter_candidates(&[
             "REJECT".to_string(),
@@ -844,6 +1057,29 @@ targets:
         );
     }
 
+    #[test]
+    fn remaining_sleep_is_interval_minus_elapsed_when_round_is_faster() {
+        let remaining = super::remaining_sleep_after_round(180, Duration::from_secs(75));
+        assert_eq!(remaining, Duration::from_secs(105));
+    }
+
+    #[test]
+    fn remaining_sleep_is_zero_when_round_meets_or_exceeds_interval() {
+        assert_eq!(
+            super::remaining_sleep_after_round(180, Duration::from_secs(180)),
+            Duration::from_secs(0)
+        );
+        assert_eq!(
+            super::remaining_sleep_after_round(180, Duration::from_secs(260)),
+            Duration::from_secs(0)
+        );
+    }
+
+    #[test]
+    fn emergency_failures_threshold_is_one() {
+        assert_eq!(super::emergency_failures_threshold(), 1);
+    }
+
     #[tokio::test]
     async fn run_jobs_in_parallel_is_not_serial() {
         let started = Instant::now();
@@ -857,6 +1093,106 @@ targets:
 
         assert_eq!(out.len(), 3);
         assert!(started.elapsed() < Duration::from_millis(170));
+    }
+
+    #[tokio::test]
+    async fn shared_probe_reuses_probe_group_switches_across_groups() {
+        let server = MockServer::start().await;
+
+        for group in ["RW_OPENAI", "RW_GITHUB"] {
+            Mock::given(method("GET"))
+                .and(path(format!("/proxies/{group}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "name": group,
+                    "now": "NodeA",
+                    "all": ["NodeA", "NodeB"]
+                })))
+                .mount(&server)
+                .await;
+        }
+
+        Mock::given(method("GET"))
+            .and(path("/proxies/RW_PROBE"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "name": "RW_PROBE",
+                "now": "ProbeStart",
+                "all": ["NodeA", "NodeB"]
+            })))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("PUT"))
+            .and(path("/proxies/RW_PROBE"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/probe-openai"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/probe-github"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let controller = ControllerClient::new(&server.uri(), None).expect("controller");
+        let probe_client = reqwest::Client::new();
+        let jobs = vec![
+            super::GroupProbeJob {
+                group_key: "OPENAI_GROUP".to_string(),
+                strategy_group: "RW_OPENAI".to_string(),
+                targets: vec![TargetConfig {
+                    name: "openai".to_string(),
+                    url: format!("{}/probe-openai", server.uri()),
+                    method: "GET".to_string(),
+                    timeout_ms: 5_000,
+                    success_status: vec![200],
+                }],
+            },
+            super::GroupProbeJob {
+                group_key: "GITHUB_GROUP".to_string(),
+                strategy_group: "RW_GITHUB".to_string(),
+                targets: vec![TargetConfig {
+                    name: "github".to_string(),
+                    url: format!("{}/probe-github", server.uri()),
+                    method: "GET".to_string(),
+                    timeout_ms: 5_000,
+                    success_status: vec![200],
+                }],
+            },
+        ];
+
+        let rounds = super::probe_groups_once(jobs, &controller, &probe_client, "RW_PROBE")
+            .await
+            .expect("probe should complete");
+
+        assert_eq!(rounds.len(), 2);
+        assert!(rounds.iter().all(|r| r.stats.len() == 2));
+
+        let requests = server.received_requests().await.expect("requests");
+        let probe_switches = requests
+            .iter()
+            .filter(|r| r.method.as_str() == "PUT" && r.url.path() == "/proxies/RW_PROBE")
+            .count();
+        let openai_switches = requests
+            .iter()
+            .filter(|r| r.method.as_str() == "PUT" && r.url.path() == "/proxies/RW_OPENAI")
+            .count();
+        let github_switches = requests
+            .iter()
+            .filter(|r| r.method.as_str() == "PUT" && r.url.path() == "/proxies/RW_GITHUB")
+            .count();
+
+        assert_eq!(
+            probe_switches, 3,
+            "expected one switch per unique node plus one restore"
+        );
+        assert_eq!(openai_switches, 0, "probe should not touch RW_OPENAI");
+        assert_eq!(github_switches, 0, "probe should not touch RW_GITHUB");
     }
 
     #[tokio::test]
@@ -930,7 +1266,10 @@ targets:
             .count();
 
         assert_eq!(openai_switches, 0, "probe should not touch strategy group");
-        assert!(probe_switches >= 1, "probe should switch probe group during tests");
+        assert!(
+            probe_switches >= 1,
+            "probe should switch probe group during tests"
+        );
     }
 
     #[tokio::test]

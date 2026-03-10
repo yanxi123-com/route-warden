@@ -174,7 +174,7 @@ fn default_cooldown_sec() -> u64 {
 }
 
 fn default_min_wins() -> u32 {
-    3
+    2
 }
 
 fn default_min_improvement() -> f64 {
