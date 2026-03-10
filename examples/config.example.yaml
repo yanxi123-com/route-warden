@@ -49,7 +49,7 @@ targets:
       success_status: [200, 301, 302]
     - name: "github-api"
       url: "https://api.github.com"
-      success_status: [200]
+      success_status: [200, 403]
   GLOBAL_BEST:
     - name: "google"
       url: "https://www.google.com/generate_204"
