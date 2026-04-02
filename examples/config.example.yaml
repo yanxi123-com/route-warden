@@ -33,8 +33,11 @@ targets:
       url: "https://www.google.com/generate_204"
       success_status: [204]
   BINANCE_GROUP:
-    - name: "binance"
+    - name: "binance-api"
       url: "https://api.binance.com/api/v3/time"
+      success_status: [200, 403]
+    - name: "binance-fapi"
+      url: "https://fapi.binance.com/api/v3/time"
       success_status: [200, 403]
   OPENAI_GROUP:
     - name: "chatgpt"
@@ -68,6 +71,7 @@ routing:
   domain_to_group:
     "google.com": "GOOGLE_GROUP"
     "api.binance.com": "BINANCE_GROUP"
+    "fapi.binance.com": "BINANCE_GROUP"
     "chatgpt.com": "OPENAI_GROUP"
     "api.openai.com": "OPENAI_GROUP"
     "github.com": "GITHUB_GROUP"
